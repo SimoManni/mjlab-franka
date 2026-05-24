@@ -13,6 +13,7 @@ the simulation runs with ``num_envs == 1``.
 from __future__ import annotations
 
 import csv
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -71,7 +72,9 @@ class MetricsRecorder:
         for key in _METRIC_KEYS:
             getattr(self, key).append(float(values[key]))
 
-    def save(self, out_dir: Path) -> tuple[Path, Path]:
+    def save(
+        self, out_dir: Path, metadata: dict | None = None
+    ) -> tuple[Path, Path, Path]:
         out_dir.mkdir(parents=True, exist_ok=True)
         csv_path = out_dir / "metrics.csv"
         png_path = out_dir / "metrics.png"
@@ -102,7 +105,14 @@ class MetricsRecorder:
         fig.savefig(png_path, dpi=120)
         plt.close(fig)
 
-        return csv_path, png_path
+        json_path = out_dir / "summary.json"
+        payload: dict = self.summary()
+        if metadata:
+            payload["trajectory"] = metadata
+        with json_path.open("w") as f:
+            json.dump(payload, f, indent=2)
+
+        return csv_path, png_path, json_path
 
     def summary(self) -> dict[str, dict[str, float]]:
         out: dict[str, dict[str, float]] = {}
@@ -456,10 +466,17 @@ class InteractivePlayApp(PlayApp):
 
         self._save_counter += 1
         out_dir = self._log_dir / f"save_{self._save_counter:03d}"
-        csv_path, png_path = self._metrics.save(out_dir)
+        metadata = {
+            "shape": self._shape_dropdown.value,
+            "period": float(self._cmd._period[0].item()),  # noqa: SLF001
+            "size": float(self._cmd._size[0].item()),  # noqa: SLF001
+        }
+        _csv, _png, json_path = self._metrics.save(out_dir, metadata=metadata)
+        del _csv, _png
 
         summary = self._metrics.summary()
-        log.info("Saved metrics to %s", out_dir)
+        log.info("Saved metrics to %s  (summary: %s)", out_dir, json_path.name)
+        del json_path
         for key, stats in summary.items():
             log.info(
                 "  %-16s  mean=%.4f  std=%.4f  max=%.4f",
@@ -474,5 +491,3 @@ class InteractivePlayApp(PlayApp):
         self._samples_text.value = "0"
         self._elapsed_record_time = 0.0
         log.info("Cleared metric buffers.")
-        # Silence unused-variable lints.
-        del csv_path, png_path

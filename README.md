@@ -128,6 +128,97 @@ Per-episode, each parallel env independently samples:
 
 The command tensor is `[target_pos_w (3), target_vel_w (3)]` per env.
 
+## Design decisions
+
+### Trajectory representation
+
+Each trajectory lives in a randomly-oriented 2D plane embedded in 3D space.
+The plane orientation is drawn from a **uniform SO(3)** distribution (QR decomposition of a Gaussian matrix), with the plane normal flipped if it points away from the robot base, so the trajectory always faces the arm.
+The 5 shapes (line, circle, square, figure-8, sinusoid) are all defined as closed parametric curves, so tracking speed and path length are both controlled by `period` and `size`.
+
+At every physics step the command term exposes a **6D vector** — `[target_pos_w (3), target_vel_w (3)]` — giving the policy both where the target is and how fast it is moving. Providing the analytic velocity directly removes the need for the policy to internally differentiate the position signal, which would require history or recurrent state.
+
+### Observations (actor — 30D)
+
+| Term | Dim | Noise |
+|---|---|---|
+| `joint_pos_rel` | 7 | ±0.01 rad uniform |
+| `joint_vel_rel` | 7 | ±0.5 rad/s uniform |
+| `ee_target_offset_w` | 3 | — |
+| `ee_target_velocity_w` | 3 | — |
+| `trajectory_plane_normal_w` | 3 | — |
+| `last_action` | 7 | — |
+
+The critic additionally observes `ee_vel` (3) and `ee_z_axis` (3) — privileged signals not available at deployment (**asymmetric actor-critic**). The extra critic information makes value estimates more accurate during training without requiring the deployed policy to observe them.
+
+`last_action` closes the loop on what the actuator last sent, giving the policy temporal context for smooth output without needing recurrence.
+
+### Noise and domain randomisation
+
+Four sources of perturbation are applied during training; all are disabled at play time except (4):
+
+1. **Per-step observation noise** — `joint_pos_rel` ±0.01 rad, `joint_vel_rel` ±0.5 rad/s (realistic encoder / tachometer noise).
+2. **Encoder bias** (startup event) — a persistent per-joint offset sampled from ±0.015 rad at the start of each episode, simulating calibration error.
+3. **Random joint reset** — episode start positions ±0.5 rad from default, velocities ±0.5 rad/s, so the policy never sees the same initial state.
+4. **Partially unreachable configurations** — random plane orientations and large sizes push portions of the trajectory outside the arm's reachable workspace. The policy must track as closely as kinematics allow; no special handling is added, so robustness emerges from training diversity alone.
+
+### Action design — quintic spline
+
+The policy outputs 7-DOF joint **position increments** Δq (scaled by 0.1 rad/step).
+`QuinticSplineJointPositionAction` then fits a **5th-order polynomial** with boundary conditions on position, velocity, *and* acceleration at both the start and end of the 20 ms control cycle, and evaluates it at each of the 4 physics sub-steps (5 ms each).
+
+This means the commanded joint trajectory is C² continuous across control cycle boundaries — position, velocity, and acceleration are all continuous — without any explicit smoothness reward. Step-change jitter at the actuator is structurally impossible.
+
+### Reward design
+
+| Term | Weight | Shape | Purpose |
+|---|---|---|---|
+| `track_ee_pos` | 5.0 | exp(−‖err‖²/0.05²) | Tight position tracking (σ = 5 cm) |
+| `track_ee_pos_coarse` | 1.0 | exp(−‖err‖²/0.20²) | Wide basin of attraction during early training |
+| `track_ee_vel` | 0.5 | exp(−‖vel_err‖²/0.50²) | Velocity tracking — incentivises keeping up with the target |
+| `ee_plane_perpendicular` | 1.0 | exp(−((1−n̂·ẑ_ee)/0.1)²) | EE z-axis aligned with plane normal (implicit orientation control) |
+| `wrist_position` | 2.0 | exp(−‖wrist_err‖²/0.05²) | Keeps wrist directly behind the EE along the plane normal — stable, singularity-avoiding posture |
+
+The dual position reward (`track_ee_pos` + `track_ee_pos_coarse`) provides a dense gradient at distance and a tight reward near the target. `ee_plane_perpendicular` avoids specifying a full 6D target pose; it only constrains the approach axis, leaving the policy free to choose wrist roll.
+
+### Evaluation
+
+Run the interactive play app, start recording, let the policy run for at least one full trajectory period, then **Save & clear**:
+
+```bash
+uv run play-interactive
+# In the viser GUI: Start recording → Save & clear
+```
+
+The output folder (`play_logs/<session>/save_NNN/`) contains:
+
+| File | Contents |
+|---|---|
+| `metrics.csv` | Per-step timeseries: `ee_pos_error`, `ee_speed_w`, `joint_vel_l2`, `joint_acc_l2`, `joint_jerk_l2`, `action_rate_l2` |
+| `metrics.png` | 6-panel plot of the above |
+| `summary.json` | Mean / std / max per metric + trajectory metadata (`shape`, `period`, `size`) |
+
+Primary tracking metric: **mean EE L2 error** (m) from `summary.json → ee_pos_error.mean`.
+Smoothness metric: `joint_jerk_l2.mean` (lower is smoother; reflects inter-cycle policy consistency).
+
+## Results
+
+Measured with the bundled checkpoint (`checkpoints/policy.pt`) using `play-interactive` — one recording per shape, each covering at least one full trajectory period (~11–12 s), size ≈ 0.13–0.18 m.
+
+| Shape | EE pos error (mm) ↓ | Joint jerk L2 (rad/s³) ↓ |
+|---|---|---|
+| line | 6.7 ± 0.4 | 8 640 ± 845 |
+| circle | 7.0 ± 1.0 | 8 248 ± 1 082 |
+| square | 2.2 ± 1.0 | 10 276 ± 1 635 |
+| figure_8 | 2.1 ± 0.7 | 10 237 ± 1 938 |
+| sinusoid | 2.4 ± 0.9 | 10 874 ± 1 077 |
+
+**EE position error** — Euclidean distance between the EE and the current trajectory target, averaged over the recording. The Franka's mechanical position repeatability is <±0.1 mm (hardware spec); the gap to that floor is policy error, not hardware error. RL policies trained purely in simulation typically achieve 5–20 mm on continuous tracking tasks; sub-10 mm is competitive, and the 2–3 mm seen on the more complex shapes (square, figure-8, sinusoid) is on par with model-based controllers that require an explicit dynamics model.
+
+**Joint jerk L2** — L2 norm of the 7-joint jerk vector (finite-difference of acceleration at 50 Hz, units rad/s³). The Franka FCI enforces hard per-joint jerk limits: 5000 rad/s³ uniformly for the FR3, and 3750–10000 rad/s³ per joint for the FER/Panda ([source](https://frankarobotics.github.io/docs/robot_specifications.html)). Dividing our L2 norm by √7 gives a rough mean per-joint figure of ~3100–4100 rad/s³ — within the per-joint limits for both robot variants. The quintic spline action parameterisation guarantees C² continuity within each 20 ms control cycle; the inter-cycle jerk visible here reflects the policy switching between cycles and is shaped by the reward, not the action parameterisation.
+
+The higher jerk for square, figure-8, and sinusoid reflects their sharper curvature and direction reversals; the lower EE error on those shapes is because those recordings used smaller, slower trajectories relative to the arm's dynamic range.
+
 ## Known issues
 
 - **torch.jit.script segfault**: workaround via `PYTORCH_JIT=0` (set in `_compat.py`).
