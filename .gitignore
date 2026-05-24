@@ -1,0 +1,47 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Hydra / Skrl run artifacts
+outputs/
+multirun/
+runs/
+
+# Local cache for checkpoints
+.cache/
+
+# Franka meshes fetched from MuJoCo Menagerie (regenerate with scripts/fetch_franka.py)
+src/mjlab_franka/robots/franka/xmls/
+
+# Misc
+.pytest_cache/
+.ruff_cache/
+
+# Project-local secrets — NEVER commit.
+# WANDB_API_KEY / WANDB_ENTITY live here (loaded by mjlab_franka._envfile).
+.env
+.env.*
+!.env.example
+.netrc
+.wandb/
+
+# Local wandb run dirs (offline runs, logs, artifacts cached on disk).
+wandb/
+**/wandb/
+
+# SSH keys accidentally dropped in the repo.
+*.pem
+id_rsa
+id_ed25519
+id_ecdsa
+*.pub
+
+# Logs
+**play_logs/
