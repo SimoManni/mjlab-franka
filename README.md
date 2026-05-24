@@ -64,6 +64,8 @@ the current trajectory target.
 
 ### Interactive playback
 
+![Interactive play demo](images/play_interactive_script.png)
+
 `play-interactive` (note the **hyphen** — the entry point is `play-interactive`,
 not `play_interactive`) launches a trained policy with extra GUI controls in
 viser: shape selection, pose randomization, period/size sliders, and metric
