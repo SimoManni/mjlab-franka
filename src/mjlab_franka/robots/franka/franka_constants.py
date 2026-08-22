@@ -1,9 +1,7 @@
 """Franka Emika Panda asset configuration for mjlab.
 
-Mirrors the pattern of ``mjlab.asset_zoo.robots.i2rt_yam.yam_constants``: the
-upstream Menagerie XML is loaded via ``mujoco.MjSpec``, the XML-defined
-actuators and keyframes are stripped, and mjlab's own
-``BuiltinPositionActuatorCfg`` / ``InitialStateCfg`` are layered on top.
+Supports both the arm-only (panda_nohand.xml) and full arm+gripper (panda.xml)
+configurations, defaulting to the no-gripper version.
 """
 
 from __future__ import annotations
@@ -24,17 +22,21 @@ from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 # MJCF and assets.
 ##
 
-FRANKA_XML: Path = Path(__file__).resolve().parent / "xmls" / "panda_nohand.xml"
-assert FRANKA_XML.exists(), (
-    f"{FRANKA_XML} missing. Run `uv run python scripts/fetch_franka.py` first."
-)
+XML_DIR = Path(__file__).resolve().parent / "xmls"
+FRANKA_NOHAND_XML: Path = XML_DIR / "panda_nohand.xml"
+FRANKA_WITH_HAND_XML: Path = XML_DIR / "panda.xml"
+
+for xml_path in (FRANKA_NOHAND_XML, FRANKA_WITH_HAND_XML):
+    assert xml_path.exists(), (
+        f"{xml_path} missing. Run `uv run python scripts/fetch_franka.py` first."
+    )
 
 FRANKA_ENTITY_NAME = "robot"
-# Site name in panda_nohand.xml, located at the standard hand attachment
-# frame (0.107 m along link7 z-axis). Used as the end-effector reference.
+# Default site name (can vary depending on XML, but attachment_site is standard)
 EE_SITE_NAME = "attachment_site"
 
 ARM_JOINT_NAMES = tuple(f"joint{i}" for i in range(1, 8))
+GRIPPER_JOINT_NAMES = ("finger_joint1", "finger_joint2")
 
 
 def _strip_xml_actuators_and_keyframes(spec: mujoco.MjSpec) -> mujoco.MjSpec:
@@ -46,9 +48,10 @@ def _strip_xml_actuators_and_keyframes(spec: mujoco.MjSpec) -> mujoco.MjSpec:
     return spec
 
 
-def get_spec() -> mujoco.MjSpec:
+def get_spec(with_gripper: bool = False) -> mujoco.MjSpec:
     """Build a clean Franka MjSpec ready for mjlab to attach actuators to."""
-    spec = mujoco.MjSpec.from_file(str(FRANKA_XML))
+    xml_path = FRANKA_WITH_HAND_XML if with_gripper else FRANKA_NOHAND_XML
+    spec = mujoco.MjSpec.from_file(str(xml_path))
     return _strip_xml_actuators_and_keyframes(spec)
 
 
@@ -56,9 +59,6 @@ def get_spec() -> mujoco.MjSpec:
 # Actuator config.
 ##
 
-# PD gains roughly matching the Menagerie default <general> actuators
-# (gainprm/biasprm), tuned for stable position control at 50-100 Hz.
-# joints 1-4 use the stronger motors, joints 5-7 the wrist motors.
 _STIFFNESS = {
     "joint1": 1000.0,
     "joint2": 1000.0,
@@ -67,6 +67,8 @@ _STIFFNESS = {
     "joint5": 300.0,
     "joint6": 300.0,
     "joint7": 300.0,
+    "finger_joint1": 100.0,
+    "finger_joint2": 100.0,
 }
 _DAMPING = {
     "joint1": 20.0,
@@ -76,6 +78,8 @@ _DAMPING = {
     "joint5": 2.0,
     "joint6": 2.0,
     "joint7": 2.0,
+    "finger_joint1": 10.0,
+    "finger_joint2": 10.0,
 }
 _EFFORT_LIMIT = {
     "joint1": 87.0,
@@ -85,9 +89,10 @@ _EFFORT_LIMIT = {
     "joint5": 12.0,
     "joint6": 12.0,
     "joint7": 12.0,
+    "finger_joint1": 20.0,
+    "finger_joint2": 20.0,
 }
-_ARMATURE = 0.1  # matches the XML default joint armature
-
+_ARMATURE = 0.1
 
 ARM_ACTUATORS: tuple[BuiltinPositionActuatorCfg, ...] = tuple(
     BuiltinPositionActuatorCfg(
@@ -100,18 +105,34 @@ ARM_ACTUATORS: tuple[BuiltinPositionActuatorCfg, ...] = tuple(
     for name in ARM_JOINT_NAMES
 )
 
-ARTICULATION = EntityArticulationInfoCfg(
-    actuators=ARM_ACTUATORS,
-    soft_joint_pos_limit_factor=0.95,
+GRIPPER_ACTUATORS: tuple[BuiltinPositionActuatorCfg, ...] = tuple(
+    BuiltinPositionActuatorCfg(
+        target_names_expr=(name,),
+        stiffness=_STIFFNESS[name],
+        damping=_DAMPING[name],
+        effort_limit=_EFFORT_LIMIT[name],
+        armature=_ARMATURE,
+    )
+    for name in GRIPPER_JOINT_NAMES
 )
+
+
+def get_articulation_cfg(with_gripper: bool = False) -> EntityArticulationInfoCfg:
+    """Get articulation config containing arm and optionally gripper actuators."""
+    actuators = ARM_ACTUATORS + GRIPPER_ACTUATORS if with_gripper else ARM_ACTUATORS
+    return EntityArticulationInfoCfg(
+        actuators=actuators,
+        soft_joint_pos_limit_factor=0.95,
+    )
+
 
 ##
 # Keyframe config.
 ##
 
-# "Home" pose from the Menagerie keyframe (qpos for the 7 arm joints).
-HOME_KEYFRAME = EntityCfg.InitialStateCfg(
-    joint_pos={
+def get_home_keyframe(with_gripper: bool = False) -> EntityCfg.InitialStateCfg:
+    """Get home keyframe joint positions including gripper states if requested."""
+    joint_pos = {
         "joint1": 0.0,
         "joint2": 0.0,
         "joint3": 0.0,
@@ -119,24 +140,33 @@ HOME_KEYFRAME = EntityCfg.InitialStateCfg(
         "joint5": 0.0,
         "joint6": math.pi / 2,
         "joint7": -math.pi / 4,
-    },
-    joint_vel={".*": 0.0},
-)
-
-
-def get_franka_robot_cfg() -> EntityCfg:
-    """Build the Franka Panda (no hand) EntityCfg."""
-    return EntityCfg(
-        init_state=HOME_KEYFRAME,
-        spec_fn=get_spec,
-        articulation=ARTICULATION,
+    }
+    if with_gripper:
+        # Fully open or partially open default position for Panda fingers
+        joint_pos.update({
+            "finger_joint1": 0.04,
+            "finger_joint2": 0.04,
+        })
+        
+    return EntityCfg.InitialStateCfg(
+        joint_pos=joint_pos,
+        joint_vel={".*": 0.0},
     )
 
 
-# Action scale per joint (0.25 * effort_limit / stiffness), matching the
-# convention used by ``G1_ACTION_SCALE`` and ``YAM_ACTION_SCALE`` in mjlab.
+def get_franka_robot_cfg(with_gripper: bool = False) -> EntityCfg:
+    """Build the Franka Panda EntityCfg, defaulting to no gripper."""
+    return EntityCfg(
+        init_state=get_home_keyframe(with_gripper),
+        spec_fn=lambda: get_spec(with_gripper),
+        articulation=get_articulation_cfg(with_gripper),
+    )
+
+
+# Action scale per joint dictionary encompassing both arm and gripper
 FRANKA_ACTION_SCALE: dict[str, float] = {
-    name: 0.25 * _EFFORT_LIMIT[name] / _STIFFNESS[name] for name in ARM_JOINT_NAMES
+    name: 0.25 * _EFFORT_LIMIT[name] / _STIFFNESS[name] 
+    for name in (*ARM_JOINT_NAMES, *GRIPPER_JOINT_NAMES)
 }
 
 
@@ -148,12 +178,7 @@ EE_WORKSPACE_PATH: Path = Path(__file__).resolve().parent / "ee_workspace.npz"
 
 
 def load_ee_workspace() -> dict[str, "np.ndarray"]:
-    """Load the pre-computed EE workspace convex hull.
-
-    Returns a dict with keys:
-        - ``vertices``: (V, 3) hull vertex positions
-        - ``equations``: (F, 4) half-plane equations (normal | offset)
-    """
+    """Load the pre-computed EE workspace convex hull."""
     import numpy as np
 
     if not EE_WORKSPACE_PATH.exists():
@@ -166,22 +191,11 @@ def load_ee_workspace() -> dict[str, "np.ndarray"]:
 
 
 def is_inside_workspace(points: "np.ndarray", equations: "np.ndarray") -> "np.ndarray":
-    """Test whether points lie inside the EE workspace convex hull.
-
-    Args:
-        points: (..., 3) array of 3D positions.
-        equations: (F, 4) half-plane equations from :func:`load_ee_workspace`.
-
-    Returns:
-        Boolean array of shape ``points.shape[:-1]``. True if inside.
-    """
+    """Test whether points lie inside the EE workspace convex hull."""
     import numpy as np
 
-    # Half-plane test: point p is inside iff  equations[:, :3] @ p + equations[:, 3] <= 0
-    # for ALL faces.
-    normals = equations[:, :3]  # (F, 3)
-    offsets = equations[:, 3]  # (F,)
-    # points: (..., 3) → dots: (..., F)
+    normals = equations[:, :3]
+    offsets = equations[:, 3]
     dots = np.einsum("...j,fj->...f", points, normals) + offsets
     return np.all(dots <= 0, axis=-1)
 
@@ -191,5 +205,6 @@ if __name__ == "__main__":
 
     from mjlab.entity.entity import Entity
 
-    robot = Entity(get_franka_robot_cfg())
+    # Defaults to no gripper unless passed True
+    robot = Entity(get_franka_robot_cfg(with_gripper=False))
     viewer.launch(robot.spec.compile())
