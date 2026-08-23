@@ -24,7 +24,6 @@ from skrl.resources.preprocessors.torch import RunningStandardScaler
 from skrl.resources.schedulers.torch import KLAdaptiveLR
 
 
-from mjlab_franka.algos.ppo_phases import MLPCfg
 from mjlab_franka.algos.registry import register_algo
 from mjlab_franka.config.base import TrainConfig
 from mjlab_franka.core.stats import skrl_agent_metrics
@@ -76,12 +75,10 @@ class MultiheadCfg:
 class PPOPhasesConfig(PPOSkrlConfig):
     """Configuration for the PPO algorithm with phase-based training."""
 
-    num_phases: int
+    num_phases: int = 0
     actor_phase_prediction: bool = False
     actor_phase_head_hidden_dims: list[int] = field(default_factory=lambda: [128, 128])
-    value_cfg: Union[MLPCfg, ResidualCfg, MultiheadCfg] = field(
-        default_factory=MLPCfg
-    )
+    value_cfg: Any = field(default_factory=MLPCfg)
 
 
 cs = ConfigStore.instance()
@@ -511,7 +508,7 @@ class _PPOPhasesAgent(PPO):
 
 
 value_cfg_to_class_map = {
-    "mlp": GaussianPolicyWithPhasePrediction,
+    "mlp": DeterministicValue,
     "residual": ResidualHeadsValueNetwork,
     "multihead": MultiHeadsValueNetwork,
 }
@@ -525,6 +522,9 @@ class PPOSkrl:
         algo: PPOPhasesConfig = train_cfg.algo  # type: ignore[assignment]
         device = train_cfg.env.device
         num_envs = env.num_envs
+
+        if algo.num_phases <= 0:
+            raise ValueError(f"Invalid num_phases: {algo.num_phases}. Must be > 0.")
 
         # Wrap mjlab env for skrl (uses single_observation_space["policy"] / ["critic"]).
         _adapt_env_spaces_in_place(env)
@@ -569,3 +569,144 @@ class PPOSkrl:
         memory = RandomMemory(
             memory_size=algo.rollouts, num_envs=wrapped.num_envs, device=device
         )
+        cfg = PPO_CFG(
+            rollouts=algo.rollouts,
+            learning_epochs=algo.learning_epochs,
+            mini_batches=algo.mini_batches,
+            discount_factor=algo.discount_factor,
+            gae_lambda=algo.gae_lambda,
+            learning_rate=algo.learning_rate,
+            grad_norm_clip=algo.grad_norm_clip,
+            ratio_clip=algo.ratio_clip,
+            value_clip=algo.value_clip,
+            entropy_loss_scale=algo.entropy_loss_scale,
+            value_loss_scale=algo.value_loss_scale,
+            kl_threshold=algo.kl_threshold,
+            time_limit_bootstrap=algo.time_limit_bootstrap,
+            mixed_precision=algo.mixed_precision,
+            state_preprocessor=RunningStandardScaler
+            if algo.state_preprocessor
+            else None,
+            state_preprocessor_kwargs=(
+                {
+                    "size": state_space if state_space is not None else obs_space,
+                    "device": device,
+                }
+                if algo.state_preprocessor
+                else {}
+            ),
+            observation_preprocessor=RunningStandardScaler
+            if algo.state_preprocessor
+            else None,
+            observation_preprocessor_kwargs=(
+                {"size": obs_space, "device": device} if algo.state_preprocessor else {}
+            ),
+            value_preprocessor=RunningStandardScaler
+            if algo.value_preprocessor
+            else None,
+            value_preprocessor_kwargs=(
+                {"size": 1, "device": device} if algo.value_preprocessor else {}
+            ),
+        )
+        # Disable skrl's built-in tracking — Tracker takes over.
+        cfg.experiment.write_interval = 0
+        cfg.experiment.checkpoint_interval = 0
+        cfg.experiment.wandb = False
+
+        agent = PPO(
+            models=models,
+            memory=memory,
+            cfg=cfg,
+            observation_space=obs_space,
+            state_space=state_space,
+            action_space=action_space,
+            device=device,
+        )
+        agent.init()
+
+        # Tracker: composes WandbLogger + CheckpointSaver + EpisodeStats.
+        tracker = Tracker(
+            train_cfg,
+            str(device),
+            agent_modules=agent.checkpoint_modules,
+            env=env,
+        )
+        end_step = tracker.start_step + algo.timesteps
+
+        log.info(
+            f"Starting training for {algo.timesteps} timesteps "
+            f"(steps {tracker.start_step}->{end_step})"
+        )
+        agent.enable_training_mode(True)
+        observations, _infos = wrapped.reset()
+        states = wrapped.state()
+
+        progress_bar = tqdm.tqdm(
+            range(tracker.start_step, end_step),
+            desc="Training",
+            initial=tracker.start_step,
+            total=end_step,
+        )
+        for timestep in progress_bar:
+            agent.pre_interaction(timestep=timestep, timesteps=end_step)
+
+            with torch.no_grad():
+                actions, _outputs = agent.act(
+                    observations, states, timestep=timestep, timesteps=end_step
+                )
+                next_observations, rewards, terminated, truncated, infos = wrapped.step(
+                    actions
+                )
+                next_states = wrapped.state()
+
+                agent.record_transition(
+                    observations=observations,
+                    states=states,
+                    actions=actions,
+                    rewards=rewards,
+                    next_observations=next_observations,
+                    next_states=next_states,
+                    terminated=terminated,
+                    truncated=truncated,
+                    infos=infos,
+                    timestep=timestep,
+                    timesteps=end_step,
+                )
+
+                tracker.record(
+                    infos.get("log", {}) if isinstance(infos, dict) else None
+                )
+
+            agent.post_interaction(timestep=timestep, timesteps=end_step)
+            tracker.flush(
+                timestep + 1,
+                progress_bar,
+                algo_stats=skrl_agent_metrics(agent),
+            )
+
+            observations = next_observations
+            states = next_states
+            _ = num_envs  # silence unused-warning when build_inference_policy is removed
+
+        tracker.finish()
+
+    @staticmethod
+    def build_inference_policy(
+        algo_cfg: PPOSkrlConfig,
+        obs_space: gym.Space,
+        action_space: gym.Space,
+        agent_state: dict[str, Any],
+        device: str = "cuda:0",
+    ) -> nn.Module:
+        """Build a deterministic policy from a saved skrl checkpoint dict."""
+        policy = GaussianPolicy(
+            obs_space,
+            action_space,
+            device,
+            algo_cfg.policy_hidden_dims,
+            algo_cfg.activation,
+            out_activation=algo_cfg.out_activation,
+        )
+        policy.load_state_dict(agent_state["policy"])
+        policy.eval()
+        return policy

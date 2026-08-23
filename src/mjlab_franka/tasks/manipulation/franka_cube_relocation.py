@@ -148,13 +148,19 @@ def make_franka_cube_relocation_env_cfg(
             entity_name=FRANKA_ENTITY_NAME,
             actuator_names=(".*",),
             include_velocity=False,
-            pos_scale=0.1,
+            arm_pos_scale=0.1
         )
     }
 
     commands: dict[str, CommandTermCfg] = {
-        "target_2D_location": Target2DGroundCommandCfg(),
-        "phase": FrankaCubePhaseCommandCfg(),
+        "target_2D_location": Target2DGroundCommandCfg(
+            resampling_time_range=(1e6, 1e6)
+        ),
+        "phase": FrankaCubePhaseCommandCfg(
+            resampling_time_range=(1e6, 1e6),
+            robot_cfg=SceneEntityCfg(FRANKA_ENTITY_NAME),
+            cube_cfg=SceneEntityCfg("cube"),
+        ),
     }
 
     events = {

@@ -1,5 +1,5 @@
 import torch
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from mjlab.managers.command_manager import CommandTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 class FrankaCubePhaseCommand(PhaseCommandTerm):
     """Manages the 4 sequential task phases using configuration aliases."""
 
-    def __init__(self, cfg: "FrankaCubePhaseCommandCfg", env: ManagerBasedRlEnv) -> None:
+    def __init__(self, cfg: "FrankaCubePhaseCommandCfg", env: "ManagerBasedRlEnv") -> None:
         super().__init__(cfg, env)
         self.env = env
         self.cfg: FrankaCubePhaseCommandCfg = cfg
@@ -75,8 +75,8 @@ class FrankaCubePhaseCommandCfg(CommandTermCfg):
 
 
     num_phases: int = 4
-    robot_cfg: SceneEntityCfg = SceneEntityCfg("franka")
-    cube_cfg: SceneEntityCfg = SceneEntityCfg("cube")
+    robot_cfg: SceneEntityCfg = field(default_factory=lambda: SceneEntityCfg("franka"))
+    cube_cfg: SceneEntityCfg = field(default_factory=lambda: SceneEntityCfg("cube"))
     target_command_name: str = "target_2D_location"
     
     # Hysteresis thresholds (Forward threshold to advance, backward to regress)
@@ -89,3 +89,5 @@ class FrankaCubePhaseCommandCfg(CommandTermCfg):
     goal_threshold: float = 0.05       # Advance to offloading when cube to goal < 0.05m
     goal_hysteresis: float = 0.08      # Fall back if distance > 0.08m
 
+    def build(self, env):
+        return FrankaCubePhaseCommand(self, env)

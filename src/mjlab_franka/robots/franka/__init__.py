@@ -5,8 +5,8 @@ from mjlab_franka.robots.franka.franka_constants import (
     EE_SITE_NAME,
     FRANKA_ACTION_SCALE,
     FRANKA_ENTITY_NAME,
-    FRANKA_XML,
-    HOME_KEYFRAME,
+    FRANKA_NOHAND_XML,
+    FRANKA_WITH_HAND_XML,
     get_franka_robot_cfg,
 )
 
@@ -16,6 +16,5 @@ __all__ = [
     "FRANKA_ACTION_SCALE",
     "FRANKA_ENTITY_NAME",
     "FRANKA_XML",
-    "HOME_KEYFRAME",
     "get_franka_robot_cfg",
 ]
