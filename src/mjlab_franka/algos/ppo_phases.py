@@ -57,9 +57,9 @@ class MLPCfg:
 class ResidualCfg:
     """Configuration for a residual network model."""
 
-    value_hidden_dims : list[int] = field(default_factory=lambda: [256, 256])
-    base_hidden_dims : list[int] = field(default_factory=lambda: [256, 256])
-    head_hidden_dims : list[int] = field(default_factory=lambda: [256, 256])
+    value_hidden_dims : list[int] = field(default_factory=lambda: [256])
+    base_hidden_dims : list[int] = field(default_factory=lambda: [128])
+    head_hidden_dims : list[int] = field(default_factory=lambda: [64, 64])
     activation: str = "elu"
     residual_l2_weight: float = 1e-4
 
