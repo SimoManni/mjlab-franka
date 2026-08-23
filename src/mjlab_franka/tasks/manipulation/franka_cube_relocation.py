@@ -118,13 +118,28 @@ def make_franka_cube_relocation_env_cfg(
     }
     critic_terms = {
         **actor_terms,
+        "phase_one_hot": ObservationTermCfg(
+            func=envs_mdp.generated_commands,
+            params={"command_name": "phase"},
+        ),
     }
+
+    phase_terms = {
+        "phase": ObservationTermCfg(
+            func=envs_mdp.generated_commands,
+            params={"command_name": "phase"},
+        ),
+    }
+
     observations = {
         "policy": ObservationGroupCfg(
             terms=actor_terms, concatenate_terms=True, enable_corruption=True
         ),
         "critic": ObservationGroupCfg(
             terms=critic_terms, concatenate_terms=True, enable_corruption=False
+        ),
+        "phase": ObservationGroupCfg(
+            terms=phase_terms, concatenate_terms=True, enable_corruption=False
         ),
     }
 
