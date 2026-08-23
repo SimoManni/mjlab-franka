@@ -371,6 +371,7 @@ def make_franka_cube_relocation_env_cfg(
         sim=SimulationCfg(
             nconmax=100,
             njmax=500,
+            contact_sensor_maxmatch=128,
             mujoco=MujocoCfg(
                 timestep=0.005,
                 iterations=10,
