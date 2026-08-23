@@ -158,7 +158,7 @@ def make_franka_cube_relocation_env_cfg(
         ),
         "phase": FrankaCubePhaseCommandCfg(
             resampling_time_range=(1e6, 1e6),
-            robot_cfg=SceneEntityCfg(FRANKA_ENTITY_NAME),
+            robot_cfg=robot_wrist_cfg,
             cube_cfg=SceneEntityCfg("cube"),
         ),
     }
@@ -194,7 +194,7 @@ def make_franka_cube_relocation_env_cfg(
             params={
                 "reward_fn_or_class": EntityEntityDistanceImprovement,
                 "active_phases": [APPROACHING],
-                "command_name": "phase",
+                "phase_command_name": "phase",
                 "source_cfg": robot_site_cfg,
                 "target_cfg": SceneEntityCfg("cube"),
                 "distance_type": "l2",
@@ -207,11 +207,10 @@ def make_franka_cube_relocation_env_cfg(
             params={
                 "reward_fn_or_class": finger_object_contact_reward,
                 "active_phases": [GRIPPING, MOVING],
-                "command_name": "phase",
+                "phase_command_name": "phase",
                 "sensor_name": "finger_cube_contact",
             },
         ),
-
 
         # Phase 2: Moving - Reward the cube for moving closer to the 2D target location
         "move_cube_to_target": RewardTermCfg(
@@ -220,9 +219,9 @@ def make_franka_cube_relocation_env_cfg(
             params={
                 "reward_fn_or_class": EntityCommandDistanceImprovement,
                 "active_phases": [MOVING],
-                "command_name": "phase",
+                "phase_command_name": "phase",
                 "asset_cfg": SceneEntityCfg("cube"),
-                "command_name_target": "target_2D_location",  # maps internally depending on class setup
+                "command_name": "target_2D_location",  # maps internally depending on class setup
                 "distance_type": "xy",
             },
         ),
@@ -234,7 +233,7 @@ def make_franka_cube_relocation_env_cfg(
             params={
                 "reward_fn_or_class": finger_object_contact_reward,
                 "active_phases": [OFFLOADING],
-                "command_name": "phase",
+                "phase_command_name": "phase",
                 "sensor_name": "finger_cube_contact",
             },
         ),
@@ -277,7 +276,7 @@ def make_franka_cube_relocation_env_cfg(
             params={
                 "term_fn": obj_at_goal,
                 "active_phases": [OFFLOADING],
-                "command_name": "phase",
+                "phase_command_name": "phase",
                 "object_cfg": SceneEntityCfg("cube"),
                 "command_name": "target_2D_location",
                 "pos_threshold": 0.05,
@@ -332,7 +331,7 @@ def make_franka_cube_relocation_env_cfg(
         name="finger_cube_contact",
         primary=ContactMatch(
             mode="subtree",
-            pattern=r"right_finger|left_finger",  # Adjust pattern to match your gripper finger link names
+            pattern=r"right_finger|left_finger",
             entity=FRANKA_ENTITY_NAME,
         ),
         secondary=ContactMatch(mode="body", pattern="cube", entity="cube"),
@@ -370,8 +369,8 @@ def make_franka_cube_relocation_env_cfg(
             azimuth=120.0,
         ),
         sim=SimulationCfg(
-            nconmax=20,
-            njmax=200,
+            nconmax=100,
+            njmax=500,
             mujoco=MujocoCfg(
                 timestep=0.005,
                 iterations=10,

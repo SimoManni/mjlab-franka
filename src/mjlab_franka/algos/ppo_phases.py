@@ -6,6 +6,7 @@ import logging
 import itertools
 from dataclasses import dataclass, field
 from typing import Any, Literal, Union
+from omegaconf import OmegaConf, DictConfig
 
 import torch
 import torch.nn as nn
@@ -30,8 +31,7 @@ from mjlab_franka.core.stats import skrl_agent_metrics
 from mjlab_franka.core.tracker import Tracker
 from mjlab_franka.algos.ppo_skrl import (
     PPOSkrlConfig, 
-    GaussianPolicy, 
-    DeterministicValue, 
+    GaussianPolicy,  
     _activation, 
     _make_mlp, 
     _adapt_env_spaces_in_place
@@ -77,7 +77,7 @@ class PPOPhasesConfig(PPOSkrlConfig):
 
     num_phases: int = 0
     actor_phase_prediction: bool = False
-    actor_phase_head_hidden_dims: list[int] = field(default_factory=lambda: [128, 128])
+    actor_phase_head_hidden_dims: list[int] = field(default_factory=lambda: [32, 32])
     value_cfg: Any = field(default_factory=MLPCfg)
 
 
@@ -167,6 +167,33 @@ class GaussianPolicyWithPhasePrediction(GaussianPolicy):
             return torch.argmax(phase_logits, dim=-1)
 
 
+class DeterministicValue(DeterministicMixin, Model):
+    """State-value critic."""
+
+    def __init__(
+        self,
+        observation_space: gym.Space,
+        action_space: gym.Space,
+        device: torch.device | str,
+        cfg: MLPCfg,  # Accept the config object
+    ) -> None:
+        Model.__init__(
+            self,
+            observation_space=observation_space,
+            action_space=action_space,
+            device=device,
+        )
+        DeterministicMixin.__init__(self, clip_actions=False)
+
+        in_dim = int(self.num_observations)
+        # Pull hidden_dims and activation from the cfg object
+        self.net, last = _make_mlp(in_dim, cfg.value_hidden_dims, cfg.activation)
+        self.value_layer = nn.Linear(last, 1)
+
+    def compute(
+        self, inputs: dict[str, torch.Tensor], role: str
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
+        return self.value_layer(self.net(inputs["states"])), {}
 
 
 class MultiHeadsValueNetwork(DeterministicMixin, Model):
@@ -508,9 +535,9 @@ class _PPOPhasesAgent(PPO):
 
 
 value_cfg_to_class_map = {
-    "mlp": DeterministicValue,
-    "residual": ResidualHeadsValueNetwork,
-    "multihead": MultiHeadsValueNetwork,
+    "mlpcfg": DeterministicValue,
+    "residualcfg": ResidualHeadsValueNetwork,
+    "multiheadcfg": MultiHeadsValueNetwork,
 }
 
 @register_algo("ppo_skrl")
@@ -540,8 +567,8 @@ class PPOSkrl:
                 observation_space=obs_space,
                 action_space=action_space,
                 device=device,
-                hidden_dims=algo.actor_hidden_dims,
-                activation=algo.actor_activation,
+                hidden_dims=algo.policy_hidden_dims,
+                activation=algo.activation,
                 num_phases=algo.num_phases,
                 phase_head_hidden_dims=algo.actor_phase_head_hidden_dims,
             )
@@ -550,18 +577,25 @@ class PPOSkrl:
                 observation_space=obs_space,
                 action_space=action_space,
                 device=device,
-                hidden_dims=algo.actor_hidden_dims,
-                activation=algo.actor_activation,
+                hidden_dims=algo.policy_hidden_dims,
+                activation=algo.activation,
             )
-        value_class = value_cfg_to_class_map.get(algo.value_cfg.__class__.__name__.lower())
+        
+        if isinstance(algo.value_cfg, DictConfig):
+            resolved_value_cfg = OmegaConf.to_object(algo.value_cfg)
+        else:
+            resolved_value_cfg = algo.value_cfg
+
+        config_type_name = type(resolved_value_cfg).__name__.lower()
+        value_class = value_cfg_to_class_map.get(config_type_name)
         if value_class is None:
-            raise ValueError(f"Unsupported value_cfg type: {type(algo.value_cfg)}")
+            raise ValueError(f"Unsupported value_cfg type: {type(resolved_value_cfg)}")
+            
         value = value_class(
             observation_space=state_space if state_space is not None else obs_space,
             action_space=action_space,
             device=device,
-            cfg=algo.value_cfg,
-            **algo.value_cfg.__dict__
+            cfg=resolved_value_cfg,
         )
 
         models = {"policy": policy, "value": value}

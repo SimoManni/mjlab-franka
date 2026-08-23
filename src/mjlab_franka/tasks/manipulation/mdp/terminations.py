@@ -24,7 +24,7 @@ def obj_at_goal(
     """
     # Retrieve object position in the world frame
     cube = env.scene[object_cfg.name]
-    cube_pos_w = cube.data.root_pos_w  # (num_envs, 3)
+    cube_pos_w = cube.data.root_link_pos_w  # (num_envs, 3)
 
     # Retrieve the 2D command target location from the command manager
     command_term = env.command_manager.get_term(command_name)

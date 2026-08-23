@@ -69,6 +69,7 @@ class EntityEntityDistanceImprovement(DistanceImprovementReward):
         source_cfg: SceneEntityCfg,
         target_cfg: SceneEntityCfg,
         distance_type: str = "l2",
+        **kwargs
     ) -> None:
         super().__init__(cfg, env)
         self._source_cfg = source_cfg
@@ -80,27 +81,27 @@ class EntityEntityDistanceImprovement(DistanceImprovementReward):
         source_entity = env.scene[self._source_cfg.name]
         if self._source_cfg.site_names:
             site_id = source_entity.find_sites(self._source_cfg.site_names)[0]
-            source_pos = source_entity.data.site_xpos[..., site_id, :]
+            source_pos = source_entity.data.site_pos_w[..., site_id, :].squeeze(1)
         else:
             body_id = self._source_cfg.body_ids[0] if self._source_cfg.body_ids else 0
-            source_pos = source_entity.data.body_pos_w[..., body_id, :]
+            source_pos = source_entity.data.body_pos_w[..., body_id, :].squeeze(1)
 
         # Retrieve target entity position
         target_entity = env.scene[self._target_cfg.name]
         if self._target_cfg.site_names:
             site_id = target_entity.find_sites(self._target_cfg.site_names)[0]
-            target_pos = target_entity.data.site_xpos[..., site_id, :]
+            target_pos = target_entity.data.site_pos_w[..., site_id, :].squeeze(1)
         else:
-            body_id = self._target_cfg.body_ids[0] if self._target_cfg.body_ids else 0
-            target_pos = target_entity.data.body_pos_w[..., body_id, :]
+            target_pos = target_entity.data.root_link_pos_w
 
         if self._distance_type == "l2":
-            return torch.norm(source_pos - target_pos, dim=-1)
+            dist = torch.norm(source_pos - target_pos, dim=-1)
         elif self._distance_type == "xy":
-            return torch.norm(source_pos[..., :2] - target_pos[..., :2], dim=-1)
+            dist = torch.norm(source_pos[..., :2] - target_pos[..., :2], dim=-1)
         else:
             raise ValueError(f"Unsupported distance type: {self._distance_type}")
-
+        
+        return dist.view(-1)
 
 class EntityCommandDistanceImprovement(DistanceImprovementReward):
     """Measures distance improvement between an entity (e.g., cube) and a command target."""
@@ -112,6 +113,7 @@ class EntityCommandDistanceImprovement(DistanceImprovementReward):
         asset_cfg: SceneEntityCfg,
         command_name: str,
         distance_type: str = "xy",
+        **kwargs
     ) -> None:
         super().__init__(cfg, env)
         self._asset_cfg = asset_cfg
@@ -121,23 +123,18 @@ class EntityCommandDistanceImprovement(DistanceImprovementReward):
     def _compute_current_distances(self, env: ManagerBasedRlEnv) -> torch.Tensor:
         # Retrieve entity position
         entity = env.scene[self._asset_cfg.name]
-        if self._asset_cfg.site_names:
-            site_id = entity.find_sites(self._asset_cfg.site_names)[0]
-            entity_pos = entity.data.site_xpos[..., site_id, :]
-        else:
-            body_id = self._asset_cfg.body_ids[0] if self._asset_cfg.body_ids else 0
-            entity_pos = entity.data.body_pos_w[..., body_id, :]
+        source_pos = entity.data.root_link_pos_w  # (num_envs, 3)
 
         # Retrieve target from command manager
         command_term = env.command_manager.get_term(self._command_name)
         target_command = command_term.command  # Expected shape (num_envs, 2) or (num_envs, 3)
 
         if self._distance_type == "xy":
-            return torch.norm(entity_pos[..., :2] - target_command[..., :2], dim=-1)
+            return torch.norm(source_pos[..., :2] - target_command[..., :2], dim=-1)
         elif self._distance_type == "l2":
             # If target command only has 2D info, pad Z with 0 or match dimensions
             target_pos_3d = torch.cat([target_command[..., :2], torch.zeros_like(target_command[..., :1])], dim=-1)
-            return torch.norm(entity_pos[..., :3] - target_pos_3d, dim=-1)
+            return torch.norm(source_pos[..., :3] - target_pos_3d, dim=-1)
         else:
             raise ValueError(f"Unsupported distance type: {self._distance_type}")
 
@@ -164,20 +161,15 @@ def finger_object_contact_reward(
     return has_contact
 
 
-def termination_triggered_reward(
-    env: ManagerBasedRlEnv,
-    termination_name: str,
-) -> torch.Tensor:
-    """Returns a binary tensor (1.0 where active, 0.0 otherwise)
-
-    indicating whether a specific termination term has been triggered.
-    """
-    # Access the termination manager's computed dones/terminated flags for the given term
-    # In mjlab / Isaac-style managers, termination terms store their current evaluation buffer in `env.termination_manager.term_dones` or similar
+def termination_triggered_reward(env: ManagerBasedRlEnv, termination_name: str) -> torch.Tensor:
+    """Reward or penalize based on whether a specific termination condition was triggered."""
+    # Check if the termination term exists in the manager's active flags or dones buffer
     if hasattr(env.termination_manager, "term_dones") and termination_name in env.termination_manager.term_dones:
-        return env.termination_manager.term_dones[termination_name].float()
-    
-    # Fallback: check if it's stored under active term history or evaluate directly if needed
-    raise KeyError(
-        f"Termination term '{termination_name}' not found in termination manager term_dones."
-    )
+        dones = env.termination_manager.term_dones[termination_name]
+    elif hasattr(env.termination_manager, "_term_dones") and termination_name in env.termination_manager._term_dones:
+        dones = env.termination_manager._term_dones[termination_name]
+    else:
+        # Fallback to checking the active termination flags buffer directly
+        dones = env.termination_manager.get_term(termination_name)
+
+    return dones.float()

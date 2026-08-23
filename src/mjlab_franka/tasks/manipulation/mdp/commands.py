@@ -35,7 +35,7 @@ class Target2DGroundCommand(CommandTerm):
         super().__init__(cfg=cfg, env=env)
 
         # Buffer holding current 2D targets for each environment: shape (num_envs, 2)
-        self.command = torch.zeros(self.num_envs, 2, device=self.device)
+        self._location = torch.zeros(self.num_envs, 2, device=self.device)
 
         # Debug visualization attributes if needed
         self._metrics = {}
@@ -53,8 +53,13 @@ class Target2DGroundCommand(CommandTerm):
         x = torch.empty(n, device=self.device).uniform_(*self.cfg.x_range)
         y = torch.empty(n, device=self.device).uniform_(*self.cfg.y_range)
 
-        self.command[env_ids, 0] = x
-        self.command[env_ids, 1] = y
+        self._location[env_ids, 0] = x
+        self._location[env_ids, 1] = y
+
+    @property
+    def command(self) -> torch.Tensor:
+        """Return the current 2D target positions for all environments."""
+        return self._location
 
     def _update_metrics(self) -> None:
-        pass
+        return {}

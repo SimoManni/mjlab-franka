@@ -31,13 +31,20 @@ class PhaseCommandTerm(CommandTerm):
         self._current_phases = torch.zeros(self._num_envs, dtype=torch.long, device=self._device)
         
         # Command tensor (one-hot encoding of the current phase)
-        self.command = torch.zeros((self._num_envs, self.num_phases), dtype=torch.float32, device=self._device)
+        self._one_hot = torch.zeros((self._num_envs, self.num_phases), dtype=torch.float32, device=self._device)
         self._update_one_hot()
 
+        self.metrics = {}
+
+    @property
+    def command(self) -> torch.Tensor:
+        """Returns the current one-hot encoded phase command for all environments."""
+        return self._one_hot
+        
     def _update_one_hot(self) -> None:
         """Updates the one-hot command buffer based on current phases."""
-        self.command.zero_()
-        self.command.scatter_(1, self._current_phases.unsqueeze(1), 1.0)
+        self._one_hot.zero_()
+        self._one_hot.scatter_(1, self._current_phases.unsqueeze(1), 1.0)
 
     def _compute_phases(self, env: ManagerBasedRlEnv, env_ids: torch.Tensor) -> torch.Tensor:
         """To be implemented by subclasses to determine phase transitions."""
@@ -56,6 +63,7 @@ class PhaseCommandTerm(CommandTerm):
             env_ids = torch.arange(self._num_envs, device=self._device)
         self._current_phases[env_ids] = 0
         self._update_one_hot()
+        return {}
 
     def is_in_phases(self, active_phases: Sequence[int]) -> torch.Tensor:
         """Checks whether the current phase of each environment matches any in the active list.
@@ -68,3 +76,6 @@ class PhaseCommandTerm(CommandTerm):
         phases_tensor = torch.tensor(active_phases, dtype=torch.long, device=self._device)
         # Check matching across environments
         return torch.isin(self._current_phases, phases_tensor)
+
+    def _update_metrics(self) -> None:
+        return {}

@@ -24,18 +24,13 @@ class FrankaCubePhaseCommand(PhaseCommandTerm):
 
     def _compute_phases(self, env_ids: torch.Tensor) -> torch.Tensor:
         robot = self.env.scene[self.cfg.robot_cfg.name]
+        ee_pos = robot.data.root_link_pos_w[env_ids]
         cube = self.env.scene[self.cfg.cube_cfg.name]
         target_term = self.env.command_manager.get_term(self.cfg.target_command_name)
         target_pos = target_term.command[env_ids]
 
-        if self.cfg.robot_cfg.site_names:
-            site_id = robot.find_sites(self.cfg.robot_cfg.site_names)[0]
-            ee_pos = robot.data.site_xpos[env_ids, site_id, :]
-        else:
-            body_id = self.cfg.robot_cfg.body_ids[0] if self.cfg.robot_cfg.body_ids else 0
-            ee_pos = robot.data.body_pos_w[env_ids, body_id, :]
 
-        cube_pos = cube.data.root_pos_w[env_ids]
+        cube_pos = cube.data.root_link_pos_w[env_ids]
 
         ee_to_cube_dist = torch.norm(ee_pos - cube_pos, dim=-1)
         cube_height = cube_pos[:, 2]

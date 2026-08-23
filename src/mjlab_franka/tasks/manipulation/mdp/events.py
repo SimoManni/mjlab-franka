@@ -44,6 +44,7 @@ def reset_robot_obj_scene(
     reset_root_state_uniform(
         env,
         env_ids,
+        pose_range={},
         asset_cfg=robot_cfg,
     )
 

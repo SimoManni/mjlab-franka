@@ -19,7 +19,7 @@ def obj_to_target_distance(
 ) -> torch.Tensor:
     """Computes the 2D distance between the object and the goal target location on the ground."""
     obj = env.scene[object_cfg.name]
-    obj_pos_w = obj.data.root_pos_w  # (num_envs, 3)
+    obj_pos_w = obj.data.root_link_pos_w  # (num_envs, 3)
 
     command_term = env.command_manager.get_term(command_name)
     target_pos = command_term.command  # (num_envs, 2)
@@ -39,11 +39,11 @@ def gripper_to_obj_distance(
     # Retrieve end-effector site position or fallback to body position
     if robot_cfg.site_names:
         site_id = robot.find_sites(robot_cfg.site_names)[0]
-        ee_pos = robot.data.site_xpos[..., site_id, :]
+        ee_pos = robot.data.site_pos_w[..., site_id, :].squeeze(1)
     else:
         body_id = robot_cfg.body_ids[0] if robot_cfg.body_ids else 0
-        ee_pos = robot.data.body_pos_w[..., body_id, :]
+        ee_pos = robot.data.body_pos_w[..., body_id, :].squeeze(1)
 
-    obj_pos = obj.data.root_pos_w
+    obj_pos = obj.data.root_link_pos_w
 
-    return torch.norm(ee_pos - obj_pos, dim=-1)
+    return torch.norm(ee_pos - obj_pos, dim=-1).view(-1)

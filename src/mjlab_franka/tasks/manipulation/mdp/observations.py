@@ -18,9 +18,9 @@ def object_pos_local(env: ManagerBasedRlEnv, robot_cfg: SceneEntityCfg, object_c
     robot = env.scene[robot_cfg.name]
     obj = env.scene[object_cfg.name]
 
-    robot_pos = robot.data.root_pos_w
-    robot_quat = robot.data.root_quat_w
-    obj_pos = obj.data.root_pos_w   
+    robot_pos = robot.data.root_link_pos_w
+    robot_quat = robot.data.root_link_quat_w
+    obj_pos = obj.data.root_link_pos_w   
     # Transform global position offset into robot's local frame
     pos_diff = obj_pos - robot_pos
     return quat_apply_inverse(robot_quat, pos_diff)
@@ -31,8 +31,8 @@ def object_rotation_matrix_local(env: ManagerBasedRlEnv, robot_cfg: SceneEntityC
     robot = env.scene[robot_cfg.name]
     obj = env.scene[object_cfg.name]
 
-    robot_quat = robot.data.root_quat_w
-    obj_quat = obj.data.root_quat_w
+    robot_quat = robot.data.root_link_quat_w
+    obj_quat = obj.data.root_link_quat_w
 
     # Compute relative rotation quaternion, then convert to rotation matrix
     # For simplicity and standard RL usage, flattening the 3x3 rotation matrix (9D) or 6D representation works well.
@@ -47,9 +47,9 @@ def object_vel_local(env: ManagerBasedRlEnv, robot_cfg: SceneEntityCfg, object_c
     robot = env.scene[robot_cfg.name]
     obj = env.scene[object_cfg.name]
 
-    robot_quat = robot.data.root_quat_w
-    obj_lin_vel_w = obj.data.root_lin_vel_w
-    obj_ang_vel_w = obj.data.root_ang_vel_w
+    robot_quat = robot.data.root_link_quat_w
+    obj_lin_vel_w = obj.data.root_link_lin_vel_w
+    obj_ang_vel_w = obj.data.root_link_ang_vel_w
 
     # Rotate linear and angular velocities into the local frame
     lin_vel_local = quat_apply_inverse(robot_quat, obj_lin_vel_w)
